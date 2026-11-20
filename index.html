@@ -307,7 +307,7 @@ function load(){
   return {...d,...r,shop:d.shop,accent:r.accent||null,border:r.border||null,sys:{...d.sys,...(r.sys||{}),stats:{...d.sys.stats,...((r.sys||{}).stats||{})}},timer:{...d.timer,...(r.timer||{})},music:{...d.music,...(r.music||{})}};
  }catch(e){return defaults()}
 }
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
+const save=()=>{S.updatedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}if(window.dashCloud)window.dashCloud.push(S)};
 let S=load();
 /* Colori personalizzati: accento (parti viola) e bordi. Vuoti = colori del tema. */
 function applyColors(){
@@ -818,6 +818,12 @@ function pMusic(){
 function pSettings(){
  return sectionTitle('Impostazioni','Profilo, obiettivi e tema.')+`
  <div class="grid">
+  <section class="card c12"><h3>${I('shield')}Account e sincronizzazione<span class="sp">${CLOUD.user?'Connesso':'Non connesso'}</span></h3>
+   ${CLOUD.user?`<div class="row" style="border:0;padding:0;flex-wrap:wrap"><div class="grow"><b>${esc(CLOUD.user.email)}</b><div class="s">${esc(CLOUD.status)}</div></div><button class="btn" data-act="logout">Esci</button></div>`:`
+   <p class="sm muted">Accedi per avere gli stessi dati su PC e cellulare. Senza accesso i dati restano solo in questo browser.</p>
+   <form data-form="login" class="form" style="margin-top:12px;border-top:0;padding-top:0"><input id="loginEmail" name="email" type="email" placeholder="Email" required value="${esc(CLOUD.email)}" data-chg="email" class="wide"><input name="password" type="password" placeholder="Password" required><button class="btn pri" type="submit" ${CLOUD.busy?'disabled':''}>Accedi</button><button class="btn ghost" type="button" data-act="resetPw">Password dimenticata</button></form>
+   ${CLOUD.msg?`<p class="sm" style="margin-top:10px">${esc(CLOUD.msg)}</p>`:''}`}
+  </section>
   <section class="card c6"><h3>Profilo e obiettivi</h3>
    <div class="plist">
     <label class="sm muted">Il tuo nome<input data-chg="setName" value="${esc(S.name)}" maxlength="24"></label>
@@ -900,6 +906,12 @@ const ACT={
  saveColors(){S.savedColors=[...S.savedColors,{a:S.accent||'#8f7cf8',b:S.border||'#243055'}].slice(-12);save();render()},
  applySaved(t){const c=S.savedColors[+t.dataset.i];if(!c)return;S.accent=c.a;S.border=c.b;save();render()},
  delSaved(t){S.savedColors=S.savedColors.filter((_,i)=>i!==+t.dataset.i);save();render()},
+ logout(){if(window.dashCloud)window.dashCloud.logout()},
+ resetPw(){
+  const e=(document.getElementById('loginEmail')?.value||'').trim();
+  if(!e){CLOUD.msg='Scrivi prima la tua email.';render();return}
+  if(window.dashCloud)window.dashCloud.reset(e);
+ },
  async pickFolder(){
   if(!window.showDirectoryPicker){$('#fallbackFolder').click();return}
   try{const h=await showDirectoryPicker({mode:'read'});await kvSet('music',h);await useFolder(h)}catch(e){}
@@ -911,6 +923,11 @@ const ACT={
 };
 const V=(f,n)=>String(f.elements[n]?.value??'').trim();
 const FORMS={
+ login(f){
+  CLOUD.email=V(f,'email');
+  if(!window.dashCloud){CLOUD.msg='Accesso non disponibile: controlla la connessione.';render();return}
+  window.dashCloud.login(CLOUD.email,f.elements.password.value);
+ },
  addQuote(f){const t=V(f,'t');if(!t)return;S.customQuotes.push({t,a:V(f,'a')||'Io'});UI.q=ALLQ().length-1;save();render()},
  addTask(f){const title=V(f,'title');if(!title)return;S.tasks.push({id:uid(),title,tag:V(f,'tag'),prio:V(f,'prio')||'media',due:V(f,'due'),focus:!!f.elements.focus.checked,done:false,doneAt:null});save();notify('Compito aggiunto','green');render()},
  addEvent(f){const title=V(f,'title');if(!title)return;S.events.push({id:uid(),title,time:V(f,'time'),date:V(f,'date')||UI.sel,type:V(f,'type')});save();render()},
@@ -933,6 +950,7 @@ const CHG={
  vol(t){MUS.a.volume=+t.value},
  setName(t){S.name=t.value.trim()||'Studente';save();render()},
  setGoal(t){S.goal=Math.min(720,Math.max(30,Math.round(+t.value)||120));save();render()},
+ email(t){CLOUD.email=t.value},
  accent(t){S.accent=t.value;save();render()},
  border(t){S.border=t.value;save();render()}
 };
@@ -944,6 +962,20 @@ window.addEventListener('hashchange',()=>{UI.page=(location.hash||'#home').slice
 MUS.a.addEventListener('play',()=>{if(UI.page==='music')render()});
 MUS.a.addEventListener('pause',()=>{if(UI.page==='music')render()});
 
+/* ---------- Ponte con il cloud (Firebase, caricato a parte) ---------- */
+const CLOUD={user:null,email:'',status:'Modalità locale: i dati restano in questo browser.',msg:'',busy:false};
+window.dashApp={
+ get updatedAt(){return S.updatedAt||0},
+ getState:()=>S,
+ applyRemote(d){
+  const r=JSON.parse(d.data),dd=defaults();
+  S={...dd,...r,shop:dd.shop,updatedAt:d.updatedAt,sys:{...dd.sys,...(r.sys||{}),stats:{...dd.sys.stats,...((r.sys||{}).stats||{})}},timer:{...dd.timer,...(r.timer||{})},music:{...dd.music,...(r.music||{})}};
+  try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}
+  render();
+ },
+ setCloud(p){Object.assign(CLOUD,p);render()}
+};
+
 /* ---------- Avvio ---------- */
 rollover();
 paintClock();render();loadWeather();loadSavedFolder();
@@ -953,6 +985,69 @@ setInterval(()=>{
 },1000);
 setInterval(loadWeather,5*60*1000);
 })();
+</script>
+<script type="module">
+/* Firebase: accesso con email e password + sincronizzazione in Firestore (users/{uid}/state/app).
+   Se il caricamento di Firebase fallisce, l'app resta utilizzabile in locale. */
+const app=window.dashApp;
+try{
+ const [{initializeApp},{getAuth,signInWithEmailAndPassword,signOut,onAuthStateChanged,sendPasswordResetEmail}]=await Promise.all([
+  import('https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js'),
+  import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js')]);
+ const {getFirestore,doc,setDoc,getDoc,onSnapshot}=await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+ const fbApp=initializeApp({
+  apiKey:"AIzaSyBpLhac9HERS6_Nwj77RUdfb6O_pudJtGo",
+  authDomain:"dashboard-studio-def.firebaseapp.com",
+  projectId:"dashboard-studio-def",
+  storageBucket:"dashboard-studio-def.firebasestorage.app",
+  messagingSenderId:"391090946810",
+  appId:"1:391090946810:web:7cb41f5d564a5097457f43"
+ });
+ const auth=getAuth(fbApp),fdb=getFirestore(fbApp);
+ const ref=uid=>doc(fdb,'users',uid,'state','app');
+ let user=null,unsub=null,timer=null;
+ window.dashCloud={
+  push(S){
+   if(!user)return;
+   clearTimeout(timer);
+   timer=setTimeout(async()=>{
+    try{
+     await setDoc(ref(user.uid),{data:JSON.stringify(S),updatedAt:S.updatedAt||Date.now()});
+     app.setCloud({status:'Sincronizzato alle '+new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'})});
+    }catch(e){app.setCloud({status:'Sincronizzazione non riuscita: controlla la connessione'})}
+   },800);
+  },
+  login(email,pw){
+   app.setCloud({msg:'',busy:true});
+   signInWithEmailAndPassword(auth,email,pw).catch(()=>app.setCloud({msg:'Email o password non corrette.',busy:false}));
+  },
+  logout(){signOut(auth)},
+  reset(email){
+   sendPasswordResetEmail(auth,email)
+    .then(()=>app.setCloud({msg:'Email di reset inviata: controlla la posta.'}))
+    .catch(()=>app.setCloud({msg:'Impossibile inviare l’email: controlla l’indirizzo.'}));
+  }
+ };
+ onAuthStateChanged(auth,async u=>{
+  user=u;
+  if(unsub){unsub();unsub=null}
+  if(!u){app.setCloud({user:null,busy:false,status:'Modalità locale: i dati restano in questo browser.'});return}
+  app.setCloud({user:{email:u.email,uid:u.uid},busy:false,status:'Connessione in corso…'});
+  unsub=onSnapshot(ref(u.uid),snap=>{
+   if(!snap.exists()||snap.metadata.hasPendingWrites)return;
+   const d=snap.data();
+   if((d.updatedAt||0)>app.updatedAt){app.applyRemote(d);app.setCloud({status:'Aggiornato da un altro dispositivo'})}
+  },()=>app.setCloud({status:'Sincronizzazione non disponibile'}));
+  try{
+   const snap=await getDoc(ref(u.uid));
+   if(!snap.exists()||app.updatedAt>(snap.data().updatedAt||0))window.dashCloud.push(app.getState());
+   app.setCloud({status:'Sincronizzato'});
+  }catch(e){app.setCloud({status:'Connessione al cloud non riuscita'})}
+ });
+}catch(e){
+ window.dashCloud=null;
+ app.setCloud({msg:'Accesso non disponibile: controlla la connessione.'});
+}
 </script>
 </body>
 </html>
