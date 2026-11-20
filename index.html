@@ -153,6 +153,10 @@ h1,h2,h3,p{margin:0}
 .mtrack[aria-current=true]{background:color-mix(in srgb,var(--accent) 18%,transparent)}
 .mtrack small{margin-left:auto;color:var(--muted);font-size:12px}
 .embed{width:100%;border:1px solid var(--line);border-radius:12px;margin-top:12px;background:var(--surface2)}
+.gate{position:fixed;inset:0;z-index:200;background:var(--bg);display:none;place-items:center;padding:16px}
+body.locked .gate{display:grid}
+.gcard{width:min(380px,100%);background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:24px;display:flex;flex-direction:column;gap:10px}
+.gcard h1{font-size:22px;font-weight:800}
 .feed{position:fixed;right:16px;bottom:16px;z-index:50;display:flex;flex-direction:column;gap:8px;align-items:flex-end;max-width:min(340px,calc(100vw - 32px))}
 .fi{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--c);border-radius:10px;padding:8px 12px;font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.25);cursor:pointer;width:100%}
 @media(max-width:900px){
@@ -186,6 +190,18 @@ h1,h2,h3,p{margin:0}
   <main id="main"></main>
 </div>
 <div class="feed" id="feed" aria-live="polite"></div>
+<div class="gate" id="gate">
+ <form data-form="login" class="gcard">
+  <div class="brand"><span class="logo"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9l10-5 10 5-10 5z"/><path d="M6 11v5c0 1.5 3 3 6 3s6-1.5 6-3v-5"/></svg></span><span>Studio</span></div>
+  <h1>Accedi</h1>
+  <p class="sm muted">Dashboard privata: serve l’accesso con email e password.</p>
+  <input id="gateEmail" name="email" type="email" placeholder="Email" required data-chg="email" value="">
+  <input name="password" type="password" placeholder="Password" required>
+  <button class="btn pri" type="submit">Accedi</button>
+  <button class="btn ghost" type="button" data-act="resetPw">Password dimenticata</button>
+  <p class="sm" id="gateMsg" style="color:var(--red);min-height:1em"></p>
+ </form>
+</div>
 
 <script>
 (function(){
@@ -854,6 +870,12 @@ const NAV=[['home','Oggi','home'],['tasks','Compiti','tasks'],['cal','Calendario
 
 function render(){
  applyColors();
+ /* Senza accesso non si mostra nulla: né pagine né dati */
+ document.body.classList.toggle('locked',!CLOUD.user);
+ if(!CLOUD.user){
+  const g=$('#gateMsg');if(g)g.textContent=CLOUD.msg||(CLOUD.ready?'':'Verifica dell’accesso in corso…');
+  $('#main').innerHTML='';$('#nav').innerHTML='';return;
+ }
  if(!PAGES[UI.page])UI.page='home';
  $('#main').innerHTML=PAGES[UI.page]();
  $('#nav').innerHTML=NAV.map(([k,l,i])=>`<a href="#${k}" aria-current="${k===UI.page?'page':'false'}">${I(i)}<span>${l}</span></a>`).join('');
@@ -908,7 +930,7 @@ const ACT={
  delSaved(t){S.savedColors=S.savedColors.filter((_,i)=>i!==+t.dataset.i);save();render()},
  logout(){if(window.dashCloud)window.dashCloud.logout()},
  resetPw(){
-  const e=(document.getElementById('loginEmail')?.value||'').trim();
+  const e=(document.getElementById('gateEmail')?.value||'').trim();
   if(!e){CLOUD.msg='Scrivi prima la tua email.';render();return}
   if(window.dashCloud)window.dashCloud.reset(e);
  },
@@ -963,17 +985,24 @@ MUS.a.addEventListener('play',()=>{if(UI.page==='music')render()});
 MUS.a.addEventListener('pause',()=>{if(UI.page==='music')render()});
 
 /* ---------- Ponte con il cloud (Firebase, caricato a parte) ---------- */
-const CLOUD={user:null,email:'',status:'Modalità locale: i dati restano in questo browser.',msg:'',busy:false};
+const CLOUD={user:null,ready:false,email:'',status:'',msg:'',busy:false};
 window.dashApp={
  get updatedAt(){return S.updatedAt||0},
  getState:()=>S,
+ /* Se il browser passa a un altro utente, parte da una dashboard vuota (i dati del cloud arrivano dopo) */
+ switchUser(uid){
+  if(localStorage.getItem('dashboard-studio-owner')===uid)return;
+  S=defaults();S.updatedAt=0;
+  try{localStorage.setItem(KEY,JSON.stringify(S));localStorage.setItem('dashboard-studio-owner',uid)}catch(e){}
+  kvDel('music');MUS.dir=null;MUS.dirName='';MUS.dirErr='';MUS.tracks=[];MUS.i=-1;MUS.a.pause();
+ },
  applyRemote(d){
   const r=JSON.parse(d.data),dd=defaults();
   S={...dd,...r,shop:dd.shop,updatedAt:d.updatedAt,sys:{...dd.sys,...(r.sys||{}),stats:{...dd.sys.stats,...((r.sys||{}).stats||{})}},timer:{...dd.timer,...(r.timer||{})},music:{...dd.music,...(r.music||{})}};
   try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}
   render();
  },
- setCloud(p){Object.assign(CLOUD,p);render()}
+ setCloud(p){Object.assign(CLOUD,{ready:true},p);render()}
 };
 
 /* ---------- Avvio ---------- */
@@ -1004,6 +1033,16 @@ try{
   appId:"1:391090946810:web:7cb41f5d564a5097457f43"
  });
  const auth=getAuth(fbApp),fdb=getFirestore(fbApp);
+ const fbErr=e=>({
+  'auth/invalid-credential':'Email o password non corrette. Controlla di aver creato questo utente in Authentication (passo 3).',
+  'auth/wrong-password':'Password non corretta.',
+  'auth/user-not-found':'Utente non trovato: crealo in Authentication → Utenti (passo 3).',
+  'auth/invalid-email':'Email non valida.',
+  'auth/operation-not-allowed':'Il login con email non è attivo: attivalo in Authentication → Metodo di accesso (passo 2).',
+  'auth/unauthorized-domain':'Dominio non autorizzato: aggiungi il sito GitHub Pages in Authentication → Impostazioni → Domini autorizzati (passo 4).',
+  'auth/too-many-requests':'Troppi tentativi: riprova più tardi.',
+  'auth/network-request-failed':'Connessione assente o bloccata.'
+ })[e.code]||('Accesso non riuscito ('+(e.code||'errore sconosciuto')+').');
  const ref=uid=>doc(fdb,'users',uid,'state','app');
  let user=null,unsub=null,timer=null;
  window.dashCloud={
@@ -1019,19 +1058,20 @@ try{
   },
   login(email,pw){
    app.setCloud({msg:'',busy:true});
-   signInWithEmailAndPassword(auth,email,pw).catch(()=>app.setCloud({msg:'Email o password non corrette.',busy:false}));
+   signInWithEmailAndPassword(auth,email,pw).catch(e=>app.setCloud({msg:fbErr(e),busy:false}));
   },
   logout(){signOut(auth)},
   reset(email){
    sendPasswordResetEmail(auth,email)
     .then(()=>app.setCloud({msg:'Email di reset inviata: controlla la posta.'}))
-    .catch(()=>app.setCloud({msg:'Impossibile inviare l’email: controlla l’indirizzo.'}));
+    .catch(e=>app.setCloud({msg:fbErr(e)}));
   }
  };
  onAuthStateChanged(auth,async u=>{
   user=u;
   if(unsub){unsub();unsub=null}
   if(!u){app.setCloud({user:null,busy:false,status:'Modalità locale: i dati restano in questo browser.'});return}
+  app.switchUser(u.uid);
   app.setCloud({user:{email:u.email,uid:u.uid},busy:false,status:'Connessione in corso…'});
   unsub=onSnapshot(ref(u.uid),snap=>{
    if(!snap.exists()||snap.metadata.hasPendingWrites)return;
